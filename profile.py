@@ -250,8 +250,8 @@ AND nbrjobs_effective_date                        =
 
 try:
     oracle = Oracle()
-    oracle.connect('***REMOVED***', '***REMOVED***', 'bandb-prod.sbcc.net'
-                           , '1521', 'prod')
+    oracle.connect('', '', ''
+                           , '1521', '')
 
     # No commit as you don-t need to commit DDL.
     
