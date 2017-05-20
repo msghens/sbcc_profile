@@ -1,10 +1,10 @@
-#!/usr/bin/python
+#!/home/mghens/google-env/bin/python
 # -*- coding: utf-8 -*-
 
 
 import json
 import sys
-import cx_Oracle
+#import cx_Oracle
 #~ import redis
 import random
 import copy
@@ -15,7 +15,17 @@ from oauth2client.tools import run
 from apiclient.discovery import build
 import httplib2
 from apiclient.http import BatchHttpRequest
+from secrets import banHOST,banUSER,banPASS,banPORT,banSID
+import log
 
+try:
+       import argparse
+       flags = argparse.ArgumentParser(parents=[tools.argparser]).parse_args()
+except ImportError:
+       flags = None
+
+
+logger = log.setup_custom_logger('root')
 
 
 __author__ = "Michael Ghens"
@@ -37,6 +47,79 @@ __status__ = "Production"
 def rows_to_dict_list(cursor):
     columns = [i[0] for i in cursor.description]
     return [dict(zip(columns, row)) for row in cursor]
+    
+    
+def get_credentials(self):
+
+		"""Gets valid user credentials from storage.
+
+		If nothing has been stored, or if the stored credentials are invalid,
+		the OAuth2 flow is completed to obtain the new credentials.
+
+		Returns:
+				Credentials, the obtained credential.
+
+		"""
+		#https://developers.google.com/admin-sdk/directory/v1/quickstart/python
+
+		try:
+				import argparse
+				flags = argparse.ArgumentParser(parents=[tools.argparser]).parse_args()
+				flags.noauth_local_webserver = True
+		except ImportError:
+				flags = None
+
+		SCOPES = ['https://www.googleapis.com/auth/admin.directory.user',
+				 'https://www.googleapis.com/auth/apps.groups.settings',
+				 'https://www.googleapis.com/auth/admin.directory.group']
+
+
+
+
+		
+		APPLICATION_NAME = 'Santa Barbarbara City College Profile Update'
+
+		home_dir = os.path.expanduser('~')
+		credential_dir = os.path.join(home_dir, '.credentials')
+		if not os.path.exists(credential_dir):
+				os.makedirs(credential_dir)
+		credential_path = os.path.join(credential_dir,'sbcc_profile.dat')
+		CLIENT_SECRET_FILE = os.path.join(credential_dir,'sbcc_profile.json')
+		store = oauth2client.file.Storage(credential_path)
+		credentials = store.get()
+		if not credentials or credentials.invalid:
+				flow = client.flow_from_clientsecrets(CLIENT_SECRET_FILE, SCOPES)
+				flow.user_agent = APPLICATION_NAME
+				if flags:
+						credentials = tools.run_flow(flow, store, flags)
+				else:
+						credentials = tools.run(flow, store)
+		return credentials
+
+
+def get_users():
+	all_users = []
+	page_token = None
+	params = {'customer': 'my_customer'}
+
+	while True:
+		try:
+			if page_token:
+				params['pageToken'] = page_token
+				current_page = directory_service.users().list(**params).execute()
+				all_users.extend(current_page['users'])
+				page_token = current_page.get('nextPageToken')
+				
+			if not page_token:
+					break
+					
+		except errors.HttpError as error:
+			logger.error('An error occurred: %s' % str(error))
+			break
+	return all_users
+
+
+
 
 
 class Oracle(object):
@@ -45,8 +128,8 @@ class Oracle(object):
         """ Connect to the database. """
 
         try:
-            dbtns = cx_Oracle.makedsn(hostname, port, servicename)
-            self.db = cx_Oracle.connect(username, password,dbtns)
+            dsn_tns = cx_Oracle.makedsn(hostname, port, servicename)
+            self.db = cx_Oracle.connect(username, password, dsn_tns)
                                 
         except cx_Oracle.DatabaseError as e:
             error, = e.args
@@ -102,41 +185,17 @@ class Oracle(object):
             self.db.commit()
  
 
-# Set up OAUTH2 stuff
-CLIENT_SECRETS ='/home/cookiemonster/common/client_secrets.json'
-
-FLOW = flow_from_clientsecrets(CLIENT_SECRETS,
-  scope=[
-      'https://www.googleapis.com/auth/admin.directory.group',
-      'https://www.googleapis.com/auth/admin.directory.group.member',
-      'https://www.googleapis.com/auth/admin.directory.group.member.readonly',
-      'https://www.googleapis.com/auth/admin.directory.group.readonly',
-      'https://www.googleapis.com/auth/admin.directory.orgunit',
-      'https://www.googleapis.com/auth/admin.directory.orgunit.readonly',
-      'https://www.googleapis.com/auth/admin.directory.user',
-      'https://www.googleapis.com/auth/admin.directory.user.alias',
-      'https://www.googleapis.com/auth/admin.directory.user.alias.readonly',
-      'https://www.googleapis.com/auth/admin.directory.user.readonly',
-    ],
-    message=tools.message_if_missing(CLIENT_SECRETS))
 
 
-storage = Storage('/home/cookiemonster/common/token.dat')
-credentials = storage.get()
-if credentials is None or credentials.invalid:
-    credentials = run(FLOW,storage)
-print credentials
 
-
-http = httplib2.Http()
-http = credentials.authorize(http)
-print http.credentials.credentials
-
+credentials = get_credentials()
+http = credentials.authorize(httplib2.Http())
 service = build('admin','directory_v1', http=http)
-gmuser_service = service.users()
+service = discovery.build('admin', 'directory_v1', http=http)
 print service._baseUrl
-# Redis local server
-#~ r_s = redis.Redis("localhost")
+
+os.exit('Stop, we can work with google')
+
 
 addressDictEmployee = {"country" : "UNITED STATES",
                "countryCode" : "US",
@@ -250,7 +309,7 @@ AND nbrjobs_effective_date                        =
 
 try:
     oracle = Oracle()
-    oracle.connect('', '', ''
+    oracle.connect(banUSER, banPASS, dsn_tns
                            , '1521', '')
 
     # No commit as you don-t need to commit DDL.
