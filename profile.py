@@ -1,22 +1,24 @@
 #!/home/mghens/google-env/bin/python
 # -*- coding: utf-8 -*-
 
-
+import pickle
 import json
-import sys
-#import cx_Oracle
-#~ import redis
+import sys,os
+import cx_Oracle
+
 import random
 import copy
-from oauth2client.client import flow_from_clientsecrets
-from oauth2client.file import Storage
+import oauth2client
+from oauth2client import client
 from oauth2client import tools
-from oauth2client.tools import run
-from apiclient.discovery import build
 import httplib2
+from apiclient import discovery,errors
 from apiclient.http import BatchHttpRequest
 from secrets import banHOST,banUSER,banPASS,banPORT,banSID
 import log
+import time
+import timeit
+from pprint import pprint
 
 try:
        import argparse
@@ -44,12 +46,20 @@ __status__ = "Production"
 
 # Initializations
 
+
+batchtosend = 150
+
+# Quota is 1,500 per 100 seconds. Should 10 seconds, for cushion.
+quotaDelay = 15.0 
+
+start_time = timeit.default_timer()
+
 def rows_to_dict_list(cursor):
     columns = [i[0] for i in cursor.description]
     return [dict(zip(columns, row)) for row in cursor]
     
     
-def get_credentials(self):
+def get_credentials():
 
 		"""Gets valid user credentials from storage.
 
@@ -97,7 +107,7 @@ def get_credentials(self):
 		return credentials
 
 
-def get_users():
+def get_users(directory_service):
 	all_users = []
 	page_token = None
 	params = {'customer': 'my_customer'}
@@ -106,9 +116,9 @@ def get_users():
 		try:
 			if page_token:
 				params['pageToken'] = page_token
-				current_page = directory_service.users().list(**params).execute()
-				all_users.extend(current_page['users'])
-				page_token = current_page.get('nextPageToken')
+			current_page = directory_service.users().list(**params).execute()
+			all_users.extend(current_page['users'])
+			page_token = current_page.get('nextPageToken')
 				
 			if not page_token:
 					break
@@ -134,9 +144,10 @@ class Oracle(object):
         except cx_Oracle.DatabaseError as e:
             error, = e.args
             if error.code == 1017:
-                print('Please check your credentials.')
+                logger.error('Please check your credentials.')
             else:
-                print('Database connection error: %s'.format(e))
+                logger.error('Database connection error: %s'.format(e))
+                logger.error(dsn_tns)
             # Very important part!
             raise
 
@@ -170,12 +181,12 @@ class Oracle(object):
         except cx_Oracle.DatabaseError as e:
             error, = e.args
             if error.code == 955:
-                print('Table already exists')
+                logger.error('Table already exists')
             elif error.code == 1031:
-                print("Insufficient privileges")
-            print(error.code)
-            print(error.message)
-            print(error.context)
+                logger.error("Insufficient privileges")
+            logger.error(error.code)
+            logger.error(error.message)
+            logger.error(error.context)
 
             # Raise the exception.
             raise
@@ -185,16 +196,39 @@ class Oracle(object):
             self.db.commit()
  
 
-
-
+logger.info("Starting profile update process")
 
 credentials = get_credentials()
 http = credentials.authorize(httplib2.Http())
-service = build('admin','directory_v1', http=http)
-service = discovery.build('admin', 'directory_v1', http=http)
-print service._baseUrl
 
-os.exit('Stop, we can work with google')
+
+service = discovery.build('admin', 'directory_v1', http=http)
+#~ print service._baseUrl
+logger.info("Getting users from gmail")
+lstartime = timeit.default_timer()
+
+
+gmusers = get_users(service)
+elapsed =  timeit.default_timer() - lstartime
+logger.info("Time to get Google Users %f", elapsed)
+
+
+with open("gmcache.p","wb") as f:
+	pickle.dump(gmusers,f)
+	
+
+
+#~ with open("gmcache.p","rb") as f:
+	#~ gmusers = pickle.load(f)
+
+#~ for u in gmusers:
+	#~ print u["primaryEmail"]
+
+
+
+#~ sys.exit('Stop, we can work with google')
+
+
 
 
 addressDictEmployee = {"country" : "UNITED STATES",
@@ -214,7 +248,7 @@ addressDictBlank = {"country" : None,
                "region": None,
                "streetAddress": None,
                "type":"work"}
-addressBlank = [addressDictBlank]
+addressBlank = [{'type': 'home'}]
 
 
 
@@ -227,19 +261,11 @@ organizationDictionary = {"department": "Administrative Systems",
                  "type": "work"}
 
 
-organizationDictionaryBlank = {"department": None,
-                               "primary": True,
-                               "title": None,
-                               "name": None,
-                               "location": None,
-                               "type": "work"}
+organizationDictionaryBlank = [{'customType': '', 'name': ''}]
 
-organizationBlank = [organizationDictionaryBlank]
+organizationBlank = [{'customType': '', 'name': ''}]
 
-phoneBlank = [{'primary': True,
-               'type': 'work',
-               'value': None},
-              ]
+phoneBlank = [{'customType': '', 'type': 'custom', 'value': ''}]
 
 
 updatecontactBlank = {"addresses":addressBlank,
@@ -252,21 +278,20 @@ updatecontactBlank = {"addresses":addressBlank,
 def update_contact(request_id, response, exception):
     if exception is not None:
         #Just pass it. Don't care if error
-        print 'ERROR: ',request_id, exception
-        sys.stdout.flush()
+        logger.error( 'ERROR: %s %s',request_id, exception)
         pass
     else:
         #Will get to it
-        print 'SUCCESS: ',request_id, response['primaryEmail']
-        sys.stdout.flush()
+        logger.info('SUCCESS: %s %s',request_id, response['primaryEmail'])
+        #~ sys.stdout.flush()
         pass
     
 
-# gmailUsers = list(r_s.smembers('gusers'))
+
 
 
 # Prep for batch
-batch = BatchHttpRequest(callback=update_contact)
+#~ batch = BatchHttpRequest(callback=update_contact)
 
 
 sql = """
@@ -307,10 +332,10 @@ AND nbrjobs_effective_date                        =
   )
 """
 
+logger.info("Getting users from banner")
 try:
     oracle = Oracle()
-    oracle.connect(banUSER, banPASS, dsn_tns
-                           , '1521', '')
+    oracle.connect(banUSER,banPASS,banHOST,banPORT,banSID)
 
     # No commit as you don-t need to commit DDL.
     
@@ -320,86 +345,105 @@ try:
 # Ensure that we always disconnect from the database to avoid
 # ORA-00018: Maximum number of sessions exceeded.
 except Exception, e:
-    print e
+    logger.error('%s', str(e))
     sys.exit("Oracle Problems") 
 finally:
     oracle.disconnect()
 
-#get set of gmail users
-#~ gmusers = list(r_s.smembers('gusers'))
-
-#get gmail users who have profiles
-#~ gmu_profile = list(r_s.smembers('gusers:profile'))
 
 
 directDict = dict()
 for i in directList:
     directDict[i['PLUSER']] = i
 
-#print len(gmusers)  
+#Memory constraints
 directList = None
-batchcount = 100
-for i  in  directDict:
-    userKey = i+'@pipeline.sbcc.edu'
-    gmcontact = copy.deepcopy(updatecontactBlank)
-    #print directDict[i]
-    #print "GMCONTACT: ",gmcontact
-    gmcontact['organizations'][0]['name'] = ''
-    gmcontact['addresses'] = [addressDictEmployee]
-    if directDict[i]['ROOM'] is not None:
-        gmcontact['organizations'][0]['location'] = directDict[i]['ROOM']
-    if directDict[i]['PHONE'] is not None:
-        gmcontact['phones'][0]['value'] = directDict[i]['PHONE']
-    else:
-        gmcontact['phones']=[{'customType': '', 'type': 'custom', 'value': '' }]
-#     print i+'@pipeline.sbcc.edu',directDict[i]
-    if directDict[i]['DEPARTMENT'] is not None:
-        gmcontact['organizations'][0]['department'] = directDict[i]['DEPARTMENT']
-    if directDict[i]['JOB_TITLE'] is not None:
-        gmcontact['organizations'][0]['title'] = directDict[i]['JOB_TITLE']
-     #print gmcontact
-    try:
-        #~ gmusers.remove(i)
-        batch.add(gmuser_service.patch(userKey=userKey,body=gmcontact))
-        #~ r_s.sadd('gusers:profile',i)
-        #~ gmu_profile.remove(i)
-        batchcount -= 1
-    except:
-        pass
-    
-    print userKey,json.dumps(gmcontact)
- 
-    
-    if batchcount == 0:
-        batchcount = 100
-        print "Send to Google"
-        sys.stdout.flush()
-        batch.execute(http=http)
-        
+batchcount = batchtosend
 
-    
-#print len(gmusers)
-#~ random.shuffle(gmusers)
+#Initialize quota delay
 
-#Remove profiles
-#~ print "Removing: ", len(gmu_profile), "profiles"
-#~ for i in gmu_profile:
-    #~ userKey = i+'@pipeline.sbcc.edu'
-    #~ gmcontact = {'addresses': [ {"type": "home"} ], 'organizations': [ None ], 'phones': [{'customType': '', 'type': 'custom', 'value': '' }],'organizations': [{'name': '', u'title': None, 'customType': '', 'location': None, 'department': None}]}
-    #~ batch.add(gmuser_service.patch(userKey=userKey,body=gmcontact))
-    #~ batchcount -= 1
-    #~ r_s.srem('gusers:profile',i)
-    #~ if batchcount == 0:
-        #~ batchcount = 100
-        #~ print "Send to Google"
-        #~ sys.stdout.flush()
-        #~ batch.execute(http=http)
-        
-if batchcount <> 0  and batchcount <> 100:
-    print "Send to Google"
-    sys.stdout.flush()
-    batch.execute(http=http)   
+startBatchRunTime = timeit.default_timer()
+batch = service.new_batch_http_request(callback=update_contact)
+for gmu in gmusers:
+	#~ print gmu["primaryEmail"]
+	pluser = gmu["primaryEmail"].split('@')[0]
+	userKey = gmu["primaryEmail"]
+	logger.debug("Checking: %s", userKey)
+	if pluser in directDict:
+		gmcontact = copy.deepcopy(updatecontactBlank)
+		#print directDict[i]
+		#print "GMCONTACT: ",gmcontact
+		gmcontact['organizations'][0]['name'] = ''
+		gmcontact['addresses'] = [addressDictEmployee]
+		if directDict[pluser]['ROOM'] is not None:
+			gmcontact['organizations'][0]['location'] = directDict[pluser]['ROOM']
+		if directDict[pluser]['PHONE'] is not None:
+			gmcontact['phones'][0]['value'] = directDict[pluser]['PHONE']
+		else:
+			gmcontact['phones']=[{'customType': '', 'type': 'custom', 'value': '' }]
+	#     print i+'@pipeline.sbcc.edu',directDict[i]
+		if directDict[pluser]['DEPARTMENT'] is not None:
+			gmcontact['organizations'][0]['department'] = directDict[pluser]['DEPARTMENT']
+		if directDict[pluser]['JOB_TITLE'] is not None:
+			gmcontact['organizations'][0]['title'] = directDict[pluser]['JOB_TITLE']
+		 #print gmcontact
+		try:
+			logger.info('Adding: %s to batch for profile update',userKey)
+			batch.add(service.users().patch(userKey=userKey,body=gmcontact))
+			batchcount -= 1
+		except Exception as e:
+			logger.error('%s', str(e))
+			sys.exit("bad batch")
+			pass
+	else:
+		gmcontact = copy.deepcopy(updatecontactBlank)
+		needClear = False
+		#Search list of dictionaries for key
+		#~ pprint(gmu)
+		#~ print(type(gmu))
+		#~ if any('primary' in d for d in gmu["addresses"]):
+		if 'addresses' in gmu:
+			if any('primary' in d for d in gmu["addresses"]):
+				needClear = True
+		if 'organizations' in gmu:
+			if any('primary' in d for d in gmu["organizations"]):
+				needClear = True
+		if 'phones' in gmu:
+			if any('primary' in d for d in gmu["phones"]):
+				needClear = True
+
+		if needClear:
+			#~ print("Clear Contact")
+			try:
+				logger.info('Adding: %s to batch for profile removal',userKey)
+				batch.add(service.users().patch(userKey=userKey,body=gmcontact))
+				batchcount -= 1
+			except Exception as e:
+				logger.error('%s', str(e))
+				sys.exit("bad batch")
+				pass
+			
     
-print
-#print directDict
-print "All done!"
+	if batchcount == 0:
+		batchcount = batchtosend
+		logger.info("Sending batch to Google")
+		batch.execute(http=http)
+		#Logic to prevent quota per 100 seconds overrun
+		batchElapse =   timeit.default_timer() - startBatchRunTime
+		if quotaDelay > batchElapse:
+			logger.info("Quota Pause: %f seconds", quotaDelay - batchElapse)
+			time.sleep(quotaDelay - batchElapse)
+		else:
+			logger.info("Quota Pause: 1 seconds")
+			time.sleep(1)
+		startBatchRunTime = timeit.default_timer()
+		batch = service.new_batch_http_request(callback=update_contact)
+        
+        
+if batchcount > 0:
+    logger.info("Sending batch to Google")
+    batch.execute(http=http)
+    
+    
+logger.info("Time to process: %f",  timeit.default_timer() - start_time)    
+logger.info("All done!")
